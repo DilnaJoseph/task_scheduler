@@ -59,6 +59,10 @@ void insertTask(struct heap *h, struct task *t) {
     pthread_mutex_lock(&h->lock); // locks the mutex (cant be used by other functions)
     if (h->size == h->capacity) {
         h->capacity *= 2; // if full double the capacity
+        if (new_arr == NULL) {
+            fprintf(stderr, "Memory allocation failed\n");
+            exit(EXIT_FAILURE);
+        }  
         h->arr = realloc(h->arr, h->capacity * sizeof(struct task*));
     }
     h->arr[h->size] = t;
