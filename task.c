@@ -185,7 +185,7 @@ int main() {
             printf("Task function (1-A 2-B 3-C 4-D 5-E): "); 
             scanf("%d", &funcChoice);
     
-            task *t = malloc(sizeof(struct task));
+            struct task *t = malloc(sizeof(struct task));
             t->id = taskId++;
             t->priority = priority;
             t->periodic = periodic;
