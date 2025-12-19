@@ -54,15 +54,39 @@ void heapifyDown(struct heap *h, int index) {
     }
 }
 
+void heapifyUpTime(struct heap *h, int index) {
+    int parent = (index - 1) / 2;
+    if (index && h->arr[parent]->executeTime > h->arr[index]->executeTime) {
+        swap(&h->arr[parent], &h->arr[index]);
+        heapifyUpTime(h, parent);
+    }
+}
+
+void heapifyDownTime(struct heap *h, int index) {
+    int left = 2*index + 1;
+    int right = 2*index + 2;
+    int smallest = index;
+
+    if (left < h->size &&
+        h->arr[left]->executeTime < h->arr[smallest]->executeTime)
+        smallest = left;
+
+    if (right < h->size &&
+        h->arr[right]->executeTime < h->arr[smallest]->executeTime)
+        smallest = right;
+
+    if (smallest != index) {
+        swap(&h->arr[index], &h->arr[smallest]);
+        heapifyDownTime(h, smallest);
+    }
+}
+
+
 // insert task to be executed later based on priority
 void insertTask(struct heap *h, struct task *t) {
     pthread_mutex_lock(&h->lock); // locks the mutex (cant be used by other functions)
     if (h->size == h->capacity) {
         h->capacity *= 2; // if full double the capacity
-        if (new_arr == NULL) {
-            fprintf(stderr, "Memory allocation failed\n");
-            exit(EXIT_FAILURE);
-        }  
         h->arr = realloc(h->arr, h->capacity * sizeof(struct task*));
     }
     h->arr[h->size] = t;
@@ -85,6 +109,29 @@ struct task* extractMax(struct heap *h) {
     pthread_mutex_unlock(&h->lock); // unlock the mutex (open to be used by other functions)
     return top;
 }
+
+void insertTimerTask(struct heap *h, struct task *t) {
+    pthread_mutex_lock(&h->lock);
+    h->arr[h->size] = t;
+    heapifyUpTime(h, h->size);
+    h->size++;
+    pthread_mutex_unlock(&h->lock);
+}
+
+struct task* extractTimerTask(struct heap *h) {
+    pthread_mutex_lock(&h->lock);
+    if (h->size == 0) {
+        pthread_mutex_unlock(&h->lock);
+        return NULL;
+    }
+    struct task *t = h->arr[0];
+    h->arr[0] = h->arr[h->size - 1];
+    h->size--;
+    heapifyDownTime(h, 0);
+    pthread_mutex_unlock(&h->lock);
+    return t;
+}
+
 
 // to check if the tasks it is dependent on is completed (completed = 1) 
 int dependenciesMet(struct task *t) {
@@ -128,12 +175,20 @@ void* schedulerLoop(void *arg) {
         time_t now = time(NULL); // now = 00:00:00 
       
         // Move tasks from timerHeap to readyHeap
-        pthread_mutex_lock(&timerHeap->lock); // locks the mutex (cant be used by other functions)
-        while(timerHeap->size > 0 && timerHeap->arr[0]->executeTime <= now) {
-            struct task *t = extractMax(timerHeap);
+        while (1) {
+            pthread_mutex_lock(&timerHeap->lock);
+        
+            if (timerHeap->size == 0 || timerHeap->arr[0]->executeTime>now) {
+                pthread_mutex_unlock(&timerHeap->lock);
+                break;
+            }
+        
+            pthread_mutex_unlock(&timerHeap->lock);
+        
+            struct task *t = extractTimerTask(timerHeap);
             insertTask(readyHeap, t);
         }
-        pthread_mutex_unlock(&timerHeap->lock);// unlock the mutex (open to be used by other functions)
+
 
         // Execute highest priority and ready task
         struct task *t = extractMax(readyHeap);
@@ -150,8 +205,6 @@ void* schedulerLoop(void *arg) {
                 t->executeTime = now + t->periodic;
                 t->completed = 0;
                 insertTask(timerHeap, t);
-            } else {
-                free(t);
             }
         } else if(t) {
             // reinsert if dependencies not met
@@ -170,12 +223,12 @@ int main() {
     struct heap *heaps[2] = { &readyHeap, &timerHeap };
 
     pthread_t schedulerThread;
-    pthread_create(&schedulerThread, NULL, schedulerLoop, heaps);
+    int schedulerStarted = 0; // Flag to check if scheduler is running
 
     int taskId = 1;
     while (1) {
         int choice;
-        printf("1. Add Task\n2.Exit\nChoice: ");
+        printf("1. Add Task\n2.Run Scheduler\n3.Exit\nChoice: ");
         scanf("%d", &choice);
 
         if (choice == 1){
@@ -210,14 +263,203 @@ int main() {
               insertTask(&readyHeap, t);
 
              printf("Task %d added (priority=%d, delay=%d, periodic=%d)\n",t->id, t->priority, delay, periodic);
-        }else if (choice == 2) {
+        }else if (choice == 2 && !schedulerStarted) {
+            pthread_create(&schedulerThread, NULL, schedulerLoop, heaps);
+            schedulerStarted = 1;
+            printf("Scheduler started.\n");
+        }else if (choice == 3) {
             printf("Exiting\n");
             break;
+        }else{
+            printf("Invalid choice\n");
         }
-
-        else printf("Invalid choice\n");
     }
 
-    pthread_join(schedulerThread, NULL);
+     if (schedulerStarted) {
+        pthread_join(schedulerThread, NULL);
+    }
     return 0;
 }
+
+
+
+/*
+test
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1
+Enter priority: 5
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 1
+
+1
+Enter priority: 10
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 2
+
+Task B executed!
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1
+Enter priority: 8
+Enter delay in seconds (0 = run now): 3
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 3
+
+1
+Enter priority: 4
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 4
+
+Task D executed!
+(wait ~3 seconds)
+Task C executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1
+Enter priority: 6
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 2
+Task function (1-A 2-B 3-C 4-D 5-E): 5
+
+Task E executed!
+(wait ~2 sec)
+Task E executed!
+(wait ~2 sec)
+Task E executed!
+....
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1
+Enter priority: 1
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 1
+
+1
+Enter priority: 10
+Enter delay in seconds (0 = run now): 0
+Periodic interval in sec (0=no): 0
+Task function (1-A 2-B 3-C 4-D 5-E): 2
+
+Task B executed!
+(after some time)
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1 → priority 5 → delay 0 → periodic 0 → task A
+1 → priority 6 → delay 0 → periodic 0 → task B
+1 → priority 7 → delay 0 → periodic 0 → task C
+1 → priority 8 → delay 0 → periodic 0 → task D
+1 → priority 9 → delay 0 → periodic 0 → task E
+
+Task E executed!
+Task D executed!
+Task C executed!
+Task B executed!
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+1
+priority: 5
+delay: 0
+periodic: 0
+task: A
+
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+Task A → priority 3
+Task B → priority 9
+
+Task B executed!
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 5
+Task B → priority 5
+Task C → priority 5
+
+Task A/B/C executed (any order)
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 8 → delay 5
+Task B → priority 4 → delay 0
+
+Task B executed!
+(wait ~5 seconds)
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 3 → delay 2
+Task B → priority 6 → delay 4
+Task C → priority 9 → delay 6
+
+(after 2s) Task A executed
+(after 4s) Task B executed
+(after 6s) Task C executed
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 10 → delay 3
+Task B → priority 1 → delay 0
+
+Task B executed!
+(wait 3s)
+Task A executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task E → priority 5 → delay 0 → periodic 2
+
+Task E executed!
+(wait 2s)
+Task E executed!
+(wait 2s)
+Task E executed!
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task E → priority 4 → periodic 2
+Task A → priority 9 → delay 1
+
+(after 1s) Task A executed!
+Task E executed!
+Task E executed!
+...
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 5 → periodic 3
+Task B → priority 8 → periodic 5
+
+Task B executed!
+Task A executed!
+(repeat respecting periods)
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task A → priority 1
+Task B → priority 10
+Task C → priority 10
+Task D → priority 10
+
+Task B/C/D executed
+(after some time)
+Task A executed
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add low priority task A → priority 1
+Continuously add priority 10 tasks
+
+Task A eventually executes
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+*/
